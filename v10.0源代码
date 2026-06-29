@@ -1,0 +1,665 @@
+// ==UserScript==
+// @name         Project-Idle-tools
+// @namespace    http://tampermonkey.net/
+// @version      10.1
+// @description  自动填表登录 + 背包物品统计 + 技能等级统计 + 账号磁条拖动分组 + 全量删除 + 名称修改 + 市场买单采集
+// @author       You
+// @match        https://idle.charsgame.com/auth*
+// @match        https://idle.charsgame.com/game/inventory*
+// @match        https://idle.charsgame.com/game
+// @match        https://idle.charsgame.com/game/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+// ============================================================
+// ★★★ 账号列表 ★★★
+// ============================================================
+const BUILTIN_ACCOUNT_GROUPS = {
+
+};
+
+const DEFAULT_EXPANDED_GROUPS = ['默认分组'];
+const ENABLE_REMEMBER_LAST = true;
+
+// ============================================================
+// ★★★ 常量 ★★★
+// ============================================================
+const SK = {
+    LAST_ACCOUNT: 'project_idle_last_account',
+    PANEL_COLLAPSED: 'project_idle_panel_collapsed',
+    PANEL_LEFT: 'project_idle_panel_left',
+    PANEL_TOP: 'project_idle_panel_top',
+    CUSTOM_ACCOUNTS: 'project_idle_custom_accounts',
+    INVENTORY_DATA: 'project_idle_inventory_data',
+    SKILL_DATA: 'project_idle_skill_data',
+    DELETED_ACCOUNTS: 'project_idle_deleted_accounts',
+    DELETED_GROUPS: 'project_idle_deleted_groups',
+    GROUP_RENAMES: 'project_idle_group_renames',
+    ACCOUNT_RENAMES: 'project_idle_account_renames',
+    BUY_ORDERS: 'project_idle_buy_orders_data',
+    BUY_TIMER: 'project_idle_buy_orders_timer',
+};
+
+const API = {
+    PROFILE: 'https://idle.charsgame.com/api/v1/player/profile',
+    INVENTORY: 'https://idle.charsgame.com/api/v1/inventory',
+    MARKET_ORDER_BOOK: 'https://idle.charsgame.com/api/v1/market/order-book',
+};
+
+const MARKET_ITEM_IDS = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,
+    21,22,23,24,25,26,27,28,29,30,31,32,64,65,66,67,68,69,70,71,72,73,
+    89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,
+    9000,9001,9002,9003];
+
+function isInventoryPage() { return window.location.pathname.includes('/game/inventory'); }
+function isAuthPage() { return window.location.pathname.includes('/auth'); }
+function isGamePage() { return window.location.pathname.startsWith('/game') && !isAuthPage(); }
+
+// ============================================================
+// ★★★ API 认证 & 数据获取 ★★★
+// ============================================================
+function getAuthToken() {
+    try { const d = JSON.parse(localStorage.getItem('project-idle-auth')); if (d?.state?.token) return d.state.token; } catch(e) {}
+    return null;
+}
+
+const ITEM_NAMES = {
+    "1":"松木","2":"橡木","3":"月桂木","4":"符纹木","5":"铜矿","6":"铁矿","7":"银矿","8":"秘银矿",
+    "9":"轻皮","10":"厚皮","11":"月纹皮","12":"雪纹皮","13":"亚麻","14":"麦穗","15":"棉花","16":"蜜糖麦",
+    "17":"月麻","18":"月露果","19":"符藤","20":"香米","21":"铁锭","22":"银锭","23":"秘银锭",
+    "24":"橡木板","25":"月桂木板","26":"符纹木板","27":"厚皮革","28":"月纹皮革","29":"雪纹皮革",
+    "30":"棉布","31":"月麻布","32":"符藤布","33":"麦香面包","34":"蜜烤面包","35":"月露软面包","36":"香米厚面包",
+    "37":"家常炖汤","38":"辛香肉汤","39":"鹿茸炖汤","40":"狼骨浓汤","41":"清甜蛋糕","42":"蜜糖蛋糕","43":"月露蛋糕","44":"香米蛋糕",
+    "45":"清露饮","46":"辛香饮","47":"月露饮","48":"符露饮",
+    "49":"T1攻击符文","50":"T2攻击符文","51":"T3攻击符文","52":"T1防御符文","53":"T2防御符文","54":"T3防御符文",
+    "55":"T1攻速符文","56":"T2攻速符文","57":"T3攻速符文","58":"T1命中符文","59":"T2命中符文","60":"T3命中符文",
+    "61":"T1技能经验符文","62":"T2技能经验符文","63":"T3技能经验符文",
+    "64":"伐木精华","65":"采矿精华","66":"狩猎精华","67":"种植精华","68":"烹饪精华","69":"锻造精华","70":"裁缝精华","71":"铭文精华","72":"炼金精华","73":"强化精华",
+    "74":"T1工艺沙拉","75":"T2工艺沙拉","76":"T3工艺沙拉","77":"T1采集派","78":"T2采集派","79":"T3采集派",
+    "80":"T1暴击符文","81":"T2暴击符文","82":"T3暴击符文","83":"T1法力符文","84":"T2法力符文","85":"T3法力符文",
+    "86":"T1生命符文","87":"T2生命符文","88":"T3生命符文","89":"亚麻布","90":"轻皮革","91":"铜锭","92":"松木板",
+    "93":"微光石","94":"凝光石","95":"月辉石","96":"星辉石","97":"晨星晶","98":"璇光晶","99":"月冕晶","100":"天枢晶",
+    "101":"松林莓","102":"橡蜜果","103":"月桂银果","104":"符纹星果",
+    "30000":"草露学徒帽","30100":"焰纹行者帽","30200":"月纹咒织兜帽","30300":"符光秘法冠",
+    "30400":"草露学徒袍","30500":"焰纹行者袍","30600":"月纹咒织长袍","30700":"符光秘法长袍",
+    "30800":"草露学徒手套","30900":"焰纹行者手套","31000":"月纹咒织护手","31100":"符光秘法护手",
+    "31200":"草露学徒裤","31300":"焰纹行者裤","31400":"月纹咒织护腿","31500":"符光秘法护腿",
+    "31600":"草露学徒短靴","31700":"焰纹行者短靴","31800":"月纹咒织长靴","31900":"符光秘法步靴",
+    "32000":"原野追猎帽","32100":"野牙行者兜帽","32200":"鹿影游侠风帽","32300":"狼纹疾猎兜帽",
+    "32400":"原野追猎皮衣","32500":"野牙行者猎装","32600":"鹿影游侠皮甲","32700":"狼纹疾猎战皮甲",
+    "32800":"原野追猎手套","32900":"野牙行者护手","33000":"鹿影游侠护腕","33100":"狼纹疾猎护腕",
+    "33200":"原野追猎护腿","33300":"野牙行者护腿","33400":"鹿影游侠护腿","33500":"狼纹疾猎护腿",
+    "33600":"原野追猎短靴","33700":"野牙行者猎靴","33800":"鹿影游侠长靴","33900":"狼纹疾猎疾风靴",
+    "34000":"铜铆守卫盔","34100":"铁壁巡卫盔","34200":"银锁堡垒盔","34300":"秘银狮卫盔",
+    "34400":"铜铆守卫胸甲","34500":"铁壁巡卫胸甲","34600":"银锁堡垒胸甲","34700":"秘银狮卫胸甲",
+    "34800":"铜铆守卫护手","34900":"铁壁巡卫臂甲","35000":"银锁堡垒臂甲","35100":"秘银狮卫臂甲",
+    "35200":"铜铆守卫腿甲","35300":"铁壁巡卫腿甲","35400":"银锁堡垒腿甲","35500":"秘银狮卫腿甲",
+    "35600":"铜铆守卫战靴","35700":"铁壁巡卫重靴","35800":"银锁堡垒战靴","35900":"秘银狮卫雄步靴",
+    "36000":"铜叶短剑","36100":"铁风长剑","36200":"银辉月纹剑","36300":"秘银符印剑",
+    "36400":"铜叶剑盾","36500":"铁壁剑盾","36600":"银纹剑盾","36700":"秘纹剑盾",
+    "36800":"松锋长矛","36900":"铁羽猎矛","37000":"赤纹月牙枪","37100":"符铁裂风矛",
+    "37200":"软木猎弓","37300":"硬木游弓","37400":"赤纹鹿影弓","37500":"符纹追风弓",
+    "37600":"草露导能杖","37700":"炎焰纤光杖","37800":"月露咒纹杖","37900":"符文秘银杖",
+    "38000":"草露护心坠","38100":"铁焰旅人坠","38200":"月纹祈愿链","38300":"符光秘银坠",
+    "38400":"铜星指环","38500":"铁焰指环","38600":"月露银纹戒","38700":"秘银符纹戒",
+    "38800":"学徒厨师帽","38900":"工匠厨师帽","39000":"月纹厨师帽","39100":"符纹厨师帽",
+    "39200":"学徒裁缝针","39300":"工匠裁缝针","39400":"月纹裁缝针","39500":"符纹裁缝针",
+    "39600":"学徒羽毛笔","39700":"工匠羽毛笔","39800":"月纹羽毛笔","39900":"符纹羽毛笔",
+    "40000":"学徒猎刀","40100":"工匠猎刀","40200":"月纹猎刀","40300":"符纹猎刀",
+    "40400":"学徒种植锄","40500":"工匠种植锄","40600":"月纹种植锄","40700":"符纹种植锄",
+    "40800":"学徒伐木斧","40900":"工匠伐木斧","41000":"月纹伐木斧","41100":"符纹伐木斧",
+    "41200":"学徒采矿镐","41300":"工匠采矿镐","41400":"月纹采矿镐","41500":"符纹采矿镐",
+    "41600":"学徒锻造锤","41700":"工匠锻造锤","41800":"月纹锻造锤","41900":"符纹锻造锤",
+    "42000":"学徒炼金瓶","42100":"工匠炼金瓶","42200":"月纹炼金瓶","42300":"符纹炼金瓶",
+    "42400":"学徒强化锤","42500":"工匠强化锤","42600":"月纹强化锤","42700":"符纹强化锤",
+    "42800":"草露采集帽","42900":"野径采集帽","43000":"月纹采集风帽","43100":"符纹采集兜帽",
+    "43200":"草露采集衣","43300":"野径采集外衣","43400":"月纹采集外衣","43500":"符纹采集长衣",
+    "43600":"草露采集手套","43700":"野径采集手套","43800":"月纹采集护手","43900":"符纹采集护手",
+    "44000":"草露采集裤","44100":"野径采集护腿","44200":"月纹采集护腿","44300":"符纹采集护腿",
+    "44400":"草露采集短靴","44500":"野径采集行靴","44600":"月纹采集长靴","44700":"符纹采集步靴",
+    "44800":"粗布工匠帽","44900":"工坊工匠帽","45000":"月纹工匠帽","45100":"符纹工匠冠",
+    "45200":"粗布工匠工袍","45300":"工坊工匠工袍","45400":"月纹工匠工袍","45500":"符纹工匠工袍",
+    "45600":"粗布工匠手套","45700":"工坊工匠护手","45800":"月纹工匠护手","45900":"符纹工匠护手",
+    "46000":"粗布工匠裤","46100":"工坊工匠护腿","46200":"月纹工匠护腿","46300":"符纹工匠护腿",
+    "46400":"粗布工匠工靴","46500":"工坊工匠工靴","46600":"月纹工匠长靴","46700":"符纹工匠步靴",
+    "46800":"粗布炼金帽","46900":"工坊炼金帽","47000":"月纹炼金帽","47100":"符纹炼金冠",
+    "47200":"粗布炼金工袍","47300":"工坊炼金工袍","47400":"月纹炼金工袍","47500":"符纹炼金工袍",
+    "47600":"粗布炼金手套","47700":"工坊炼金护手","47800":"月纹炼金护手","47900":"符纹炼金护手",
+    "48000":"粗布炼金裤","48100":"工坊炼金护腿","48200":"月纹炼金护腿","48300":"符纹炼金护腿",
+    "48400":"粗布炼金工靴","48500":"工坊炼金工靴","48600":"月纹炼金长靴","48700":"符纹炼金步靴",
+    "48800":"粗布强化帽","48900":"工坊强化帽","49000":"月纹强化帽","49100":"符纹强化冠",
+    "49200":"粗布强化工袍","49300":"工坊强化工袍","49400":"月纹强化工袍","49500":"符纹强化工袍",
+    "49600":"粗布强化手套","49700":"工坊强化护手","49800":"月纹强化护手","49900":"符纹强化护手",
+    "50000":"粗布强化裤","50100":"工坊强化护腿","50200":"月纹强化护腿","50300":"符纹强化护腿",
+    "50400":"粗布强化工靴","50500":"工坊强化工靴","50600":"月纹强化长靴","50700":"符纹强化步靴",
+    "52000":"雾沼魔质","52001":"极光霜晶","52002":"雷羽风晶","52003":"暗月龙骨残片",
+    "52010":"雾沼铜锭","52011":"雾沼木板","52012":"雾沼皮革","52013":"雾沼布",
+    "52014":"极光铁锭","52015":"极光木板","52016":"极光皮革","52017":"极光布",
+    "52018":"雷羽银锭","52019":"雷羽木板","52020":"雷羽皮革","52021":"雷羽布",
+    "52022":"暗月秘银锭","52023":"暗月木板","52024":"暗月皮革","52025":"暗月布",
+    "60000":"雾沼秘学帽","60100":"极光织法帽","60200":"星尘风语帽","60300":"幽月灵纱帽",
+    "60400":"雾沼秘学袍","60500":"极光织法袍","60600":"星尘风语袍","60700":"幽月灵纱袍",
+    "60800":"雾沼秘学手套","60900":"极光织法手套","61000":"星尘风语手套","61100":"幽月灵纱手套",
+    "61200":"雾沼秘学护腿","61300":"极光织法护腿","61400":"星尘风语护腿","61500":"幽月灵纱护腿",
+    "61600":"雾沼秘学长靴","61700":"极光织法长靴","61800":"星尘风语长靴","61900":"幽月灵纱长靴",
+    "62000":"沼鳞伏行帽","62100":"冰牙巡猎帽","62200":"雷羽巡空帽","62300":"夜鸦追猎帽",
+    "62400":"沼鳞伏行皮衣","62500":"冰牙巡猎皮衣","62600":"雷羽巡空皮衣","62700":"夜鸦追猎皮衣",
+    "62800":"沼鳞伏行护手","62900":"冰牙巡猎护手","63000":"雷羽巡空护手","63100":"夜鸦追猎护手",
+    "63200":"沼鳞伏行护腿","63300":"冰牙巡猎护腿","63400":"雷羽巡空护腿","63500":"夜鸦追猎护腿",
+    "63600":"沼鳞伏行猎靴","63700":"冰牙巡猎猎靴","63800":"雷羽巡空猎靴","63900":"夜鸦追猎猎靴",
+    "64000":"泥背坚壳盔","64100":"霜角卫戍盔","64200":"风暴云卫盔","64300":"暗月骸卫盔",
+    "64400":"泥背坚壳胸甲","64500":"霜角卫戍胸甲","64600":"风暴云卫胸甲","64700":"暗月骸卫胸甲",
+    "64800":"泥背坚壳护手","64900":"霜角卫戍护手","65000":"风暴云卫护手","65100":"暗月骸卫护手",
+    "65200":"泥背坚壳腿甲","65300":"霜角卫戍腿甲","65400":"风暴云卫腿甲","65500":"暗月骸卫腿甲",
+    "65600":"泥背坚壳战靴","65700":"霜角卫戍战靴","65800":"风暴云卫战靴","65900":"暗月骸卫战靴",
+    "66000":"沼骨短剑","66100":"冰牙长剑","66200":"风切雷刃","66300":"星蚀骨刃",
+    "66400":"泥背剑盾","66500":"霜角剑盾","66600":"风暴剑盾","66700":"暗月骨盾剑",
+    "66800":"芦骨长矛","66900":"冰枝长矛","67000":"风切长矛","67100":"古符骨矛",
+    "67200":"雾沼猎弓","67300":"寒风雪弓","67400":"雷羽巡空弓","67500":"骨翼夜弓",
+    "67600":"雾沼导能杖","67700":"极光咒纹杖","67800":"星尘唤雷杖","67900":"幽月引魂杖",
+    "9000":"小宝箱-战斗","9001":"小宝箱-采集","9002":"小宝箱-制造","9003":"钻石袋10"
+};
+
+const SKILL_NAMES = {1:'伐木',2:'采矿',4:'狩猎',5:'种植',6:'烹饪',7:'锻造',8:'炼金',9:'强化',
+    10:'裁缝',12:'铭文',13:'强壮',14:'近战',15:'远程',16:'法术',17:'长剑',18:'剑盾',
+    19:'长矛',20:'弓箭',21:'火焰',22:'冰霜',23:'闪电',24:'神圣',25:'布甲',26:'皮甲',27:'重甲'};
+
+// ============================================================
+// ★★★ API 函数 ★★★
+// ============================================================
+async function fetchAPI(url, body) {
+    const token = getAuthToken();
+    if (!token) return null;
+    try {
+        const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`}, body:JSON.stringify(body||{}) });
+        const d = await r.json();
+        return d.code === 20000 ? d.data : null;
+    } catch(e) { return null; }
+}
+
+async function fetchInventoryFromAPI() {
+    const data = await fetchAPI(API.INVENTORY, {});
+    if (!data) return {};
+    const items = {};
+    (data.inventory || []).forEach(item => { const n = ITEM_NAMES[item.itemId]; if (n) items[n] = (items[n]||0) + item.qty; });
+    return items;
+}
+
+async function fetchProfileFromAPI() {
+    const data = await fetchAPI(API.PROFILE, {});
+    if (!data?.player) return {skills:{}, gold:0, diamonds:0, totalLevel:0, combatLevel:0, playerName:''};
+    const p = data.player, skills = {};
+    (p.actionSkills||[]).forEach(s => { const n = SKILL_NAMES[s.actionSkillId]; if (n) skills[n] = s.level; });
+    return {skills, gold:p.gold||0, diamonds:p.diamonds||0, totalLevel:p.totalLevel||0, combatLevel:p.combatLevel||0, playerName:p.name||''};
+}
+
+// ============================================================
+// ★★★ 背包解析 ★★★
+// ============================================================
+async function parseInventory() {
+    const api = await fetchInventoryFromAPI();
+    if (Object.keys(api).length > 0) return api;
+    const items = {}, grid = document.querySelector('.inventory-grid');
+    if (!grid) return items;
+    grid.querySelectorAll('.inventory-item-tooltip').forEach(el => {
+        const btn = el.querySelector('button');
+        if (!btn) return;
+        const label = btn.getAttribute('aria-label')||'', m = label.match(/^(.+?)，数量\s*(\d+)$/);
+        if (m) { const n=m[1].trim(), q=parseInt(m[2])||0; items[n]=(items[n]||0)+q; }
+        else { const qs = btn.querySelector('.inventory-item-quantity'); if (qs) { const n2=label.split(/[，,]/)[0].trim()||'未知'; items[n2]=(items[n2]||0)+(parseInt(qs.textContent.trim())||1); } }
+    });
+    return items;
+}
+
+async function parseSkills() {
+    const p = await fetchProfileFromAPI();
+    if (Object.keys(p.skills).length > 0) return p.skills;
+    const skills = {};
+    document.querySelectorAll('.flex-1.py-2 section.py-2').forEach(sec => {
+        sec.querySelectorAll('a').forEach(link => {
+            const ne = link.querySelector('.flex-1.text-left');
+            if (!ne) return;
+            const n = ne.textContent.trim(); if (!n) return;
+            const ls = link.querySelector('.tabular-nums');
+            skills[n] = ls ? parseInt(ls.textContent.trim())||0 : 0;
+        });
+    });
+    return skills;
+}
+
+// ============================================================
+// ★★★ 存储工具 ★★★
+// ============================================================
+function storageGet(key, fallback) { try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : fallback; } catch { return fallback; } }
+function storageSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} }
+
+function getAllInventoryData() { return storageGet(SK.INVENTORY_DATA, {}); }
+function saveCurrentInventory(email, name) { return (async()=>{const items=await parseInventory(); if(!Object.keys(items).length) return false; const d=getAllInventoryData(); d[email]={name,email,items,timestamp:Date.now()}; storageSet(SK.INVENTORY_DATA,d); return true;})(); }
+function clearAllInventoryData() { localStorage.removeItem(SK.INVENTORY_DATA); updateStatus('🗑️ 背包数据已清除'); }
+function getAggregatedInventory() { const d=getAllInventoryData(); const a={}; Object.values(d).forEach(e=>{if(e.items) Object.entries(e.items).forEach(([n,q])=>{a[n]=(a[n]||0)+q})}); return{a,rawData:d}; }
+
+function getAllSkillData() { return storageGet(SK.SKILL_DATA, {}); }
+function saveCurrentSkills(email, name) { return (async()=>{const skills=await parseSkills(); if(!Object.keys(skills).length) return false; const d=getAllSkillData(); d[email]={name,email,skills,timestamp:Date.now()}; storageSet(SK.SKILL_DATA,d); return true;})(); }
+function clearAllSkillData() { localStorage.removeItem(SK.SKILL_DATA); updateStatus('🗑️ 技能数据已清除'); }
+function getAggregatedSkills() { const d=getAllSkillData(); const em=Object.keys(d), sn=new Set(); Object.values(d).forEach(e=>{if(e.skills) Object.keys(e.skills).forEach(n=>sn.add(n))}); const sa={}, sav={}, sm={}; sn.forEach(n=>{const lv={}; let t=0,c=0,mx=0; em.forEach(e=>{const l=(d[e].skills&&d[e].skills[n])||0; lv[e]=l; if(l>0){t+=l;c++;mx=Math.max(mx,l)}}); sa[n]=lv; sav[n]=c>0?Math.round(t/c*10)/10:0; sm[n]=mx}); return{skillAccounts:sa,skillAvg:sav,skillMax:sm,rawData:d}; }
+
+function getBuyOrders() { return storageGet(SK.BUY_ORDERS, {}); }
+function saveBuyOrders(d) { storageSet(SK.BUY_ORDERS, d); }
+function clearBuyOrders() { localStorage.removeItem(SK.BUY_ORDERS); localStorage.removeItem(SK.BUY_TIMER); }
+
+// ============================================================
+// ★★★ 工具函数 ★★★
+// ============================================================
+function hashObject(obj) { const s=JSON.stringify(obj); let h=0; for(let i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i);h=h&h} return h; }
+function getAccountGroupName(email) { const g=getAllAccountGroups(); for(const[gn,aa]of Object.entries(g)){if(aa.some(a=>a.email===email)) return gn} return'其他'; }
+function downloadFile(c,f,m) { const b=new Blob([c],{type:m}),u=URL.createObjectURL(b),a=document.createElement('a'); a.href=u;a.download=f;a.click();URL.revokeObjectURL(u); }
+function dateStr() { return new Date().toISOString().slice(0,10); }
+function removeAllOverlays() { document.querySelectorAll('div[id^="stats-overlay-"]').forEach(el=>el.remove()); }
+function sleep(ms) { return new Promise(r=>setTimeout(r,ms)); }
+
+function createBaseOverlay() {
+    const o=document.createElement('div'); o.id='stats-overlay-'+Date.now();
+    o.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:100003;display:flex;align-items:center;justify-content:center;';
+    const d=document.createElement('div'); d.className='stats-dialog';
+    d.style.cssText='background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:20px 24px;width:750px;max-width:95vw;max-height:85vh;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#eee;font-family:\'Segoe UI\',Arial,sans-serif;font-size:13px;overflow:hidden;display:flex;flex-direction:column;';
+    d.innerHTML='<div class="stats-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-shrink:0;"></div><div class="stats-filter-bar" style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;flex-shrink:0;flex-direction:column;"></div><div class="stats-table-container" style="overflow-y:auto;flex:1;scrollbar-width:thin;scrollbar-color:#333 transparent;"></div><div style="margin-top:8px;color:#666;font-size:10px;text-align:right;flex-shrink:0;">更新: '+new Date().toLocaleString()+'</div>';
+    o.appendChild(d); document.body.appendChild(o); return o;
+}
+
+// ============================================================
+// ★★★ 背包统计弹窗 ★★★
+// ============================================================
+function showInventoryStats() {
+    const {a:aggregated,rawData}=getAggregatedInventory(), em=Object.keys(rawData);
+    if(!em.length){alert('暂无背包数据。请先进入游戏页，脚本会自动通过 API 获取。');return;}
+    const gm={}; em.forEach(e=>{const gn=getAccountGroupName(e); if(!gm[gn])gm[gn]=[]; gm[gn].push(e);});
+    const gn=Object.keys(gm), overlay=createBaseOverlay(), dialog=overlay.querySelector('.stats-dialog');
+
+    const sb=document.createElement('div'); sb.style.cssText='margin-bottom:8px;flex-shrink:0;';
+    sb.innerHTML='<div style="display:flex;gap:6px;align-items:center;width:100%;"><input id="stats-search-input" type="text" placeholder="🔍 搜索物品名称..." style="flex:1;padding:6px 10px;background:rgba(255,255,255,0.06);color:#eee;border:1px solid rgba(255,255,255,0.12);border-radius:6px;font-size:12px;outline:none;"><button id="stats-search-clear" style="padding:6px 10px;background:rgba(255,255,255,0.06);color:#aaa;border:1px solid rgba(255,255,255,0.1);border-radius:6px;cursor:pointer;font-size:11px;display:none;">✕ 清除</button></div>';
+    dialog.insertBefore(sb,dialog.querySelector('.stats-filter-bar'));
+
+    const h=overlay.querySelector('.stats-header');
+    h.innerHTML='<div style="font-size:16px;font-weight:bold;color:#f0a500;">📦 背包统计 <span style="color:#888;font-weight:normal;font-size:12px;margin-left:8px;">'+em.length+' 人 · '+Object.keys(aggregated).length+' 种物品</span></div><div style="display:flex;gap:6px;align-items:center;"><button class="stats-export" data-type="inventory-json" style="padding:5px 10px;background:rgba(255,255,255,0.06);color:#aaa;border:1px solid rgba(255,255,255,0.1);border-radius:6px;cursor:pointer;font-size:11px;">📥 JSON</button><button class="stats-export" data-type="inventory-csv" style="padding:5px 10px;background:rgba(255,255,255,0.06);color:#aaa;border:1px solid rgba(255,255,255,0.1);border-radius:6px;cursor:pointer;font-size:11px;">📥 CSV</button><span class="stats-close" style="cursor:pointer;color:#888;font-size:18px;padding:2px 4px;">✕</span></div>';
+
+    const fb=overlay.querySelector('.stats-filter-bar'); fb.innerHTML='';
+    const af=document.createElement('button'); af.textContent='📋 全部 ('+em.length+')'; af.style.cssText='padding:4px 10px;border-radius:12px;cursor:pointer;font-size:11px;border:1px solid #f0a500;background:rgba(240,165,0,0.2);color:#f0a500;font-weight:bold;'; fb.appendChild(af);
+    const gr=document.createElement('div'); gr.style.cssText='display:flex;gap:4px;flex-wrap:wrap;width:100%;';
+    const gfb=[]; gn.forEach(g=>{const btn=document.createElement('button'); btn.textContent='📁 '+g+' ('+gm[g].length+')'; btn.dataset.group=g; btn.style.cssText='padding:4px 10px;border-radius:12px;cursor:pointer;font-size:11px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);color:#aaa;'; btn.onmouseover=()=>{if(!btn.classList.contains('active')){btn.style.background='rgba(240,165,0,0.15)';btn.style.color='#eee'}}; btn.onmouseout=()=>{if(!btn.classList.contains('active')){btn.style.background='rgba(255,255,255,0.05)';btn.style.color='#aaa'}}; btn.onclick=()=>{gfb.forEach(b=>{b.classList.remove('active');b.style.background='rgba(255,255,255,0.05)';b.style.color='#aaa';b.style.borderColor='rgba(255,255,255,0.15)'}); afb.forEach(b=>{b.classList.remove('active');b.style.background='rgba(255,255,255,0.05)';b.style.color='#aaa';b.style.borderColor='rgba(255,255,255,0.15)'}); af.style.background='rgba(255,255,255,0.05)';af.style.color='#aaa';af.style.borderColor='rgba(255,255,255,0.15)';af.style.fontWeight='normal'; btn.classList.add('active');btn.style.background='rgba(240,165,0,0.2)';btn.style.color='#f0a500';btn.style.borderColor='#f0a500'; const ge=gm[g],fd={}; ge.forEach(e=>{if(rawData[e])fd[e]=rawData[e]}); renderView(fd);}; gfb.push(btn); gr.appendChild(btn);}); fb.appendChild(gr);
+    const ar=document.createElement('div'); ar.id='stats-filter-accounts'; ar.style.cssText='display:flex;gap:4px;flex-wrap:wrap;width:100%;margin-top:4px;';
+    const afb=[]; em.forEach(e=>{const btn=document.createElement('button'); btn.textContent='👤 '+(rawData[e]?.name||e); btn.dataset.email=e; btn.style.cssText='padding:3px 8px;border-radius:10px;cursor:pointer;font-size:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);color:#aaa;'; btn.onmouseover=()=>{if(!btn.classList.contains('active')){btn.style.background='rgba(240,165,0,0.15)';btn.style.color='#eee'}}; btn.onmouseout=()=>{if(!btn.classList.contains('active')){btn.style.background='rgba(255,255,255,0.05)';btn.style.color='#aaa'}}; btn.onclick=()=>{afb.forEach(b=>{b.classList.remove('active');b.style.background='rgba(255,255,255,0.05)';b.style.color='#aaa';b.style.borderColor='rgba(255,255,255,0.15)'}); gfb.forEach(b=>{b.classList.remove('active');b.style.background='rgba(255,255,255,0.05)';b.style.color='#aaa';b.style.borderColor='rgba(255,255,255,0.15)'}); af.style.background='rgba(255,255,255,0.05)';af.style.color='#aaa';af.style.borderColor='rgba(255,255,255,0.15)';af.style.fontWeight='normal'; btn.classList.add('active');btn.style.background='rgba(240,165,0,0.2)';btn.style.color='#f0a500';btn.style.borderColor='#f0a500'; const fd={}; fd[e]=rawData[e]; renderView(fd);}; afb.push(btn); ar.appendChild(btn);}); fb.appendChild(ar);
+
+    af.onclick=()=>{afb.forEach(b=>{b.classList.remove('active');b.style.background='rgba(255,255,255,0.05)';b.style.color='#aaa';b.style.borderColor='rgba(255,255,255,0.15)'}); gfb.forEach(b=>{b.classList.remove('active');b.style.background='rgba(255,255,255,0.05)';b.style.color='#aaa';b.style.borderColor='rgba(255,255,255,0.15)'}); af.style.background='rgba(240,165,0,0.2)';af.style.color='#f0a500';af.style.borderColor='#f0a500';af.style.fontWeight='bold'; renderView(rawData);}; af.click();
+
+    function renderView(fd) {
+        const c=overlay.querySelector('.stats-table-container'), si=document.getElementById('stats-search-input'), cb=document.getElementById('stats-search-clear');
+        if(!c) return;
+        const st=si?si.value.trim().toLowerCase():'', el=Object.keys(fd);
+        if(!el.length){c.innerHTML='<div style="color:#888;text-align:center;padding:20px;">暂无数据</div>';return;}
+        if(st){cb.style.display='inline-block'; const mi=Object.keys(aggregated).filter(n=>n.toLowerCase().includes(st)).sort(); if(!mi.length){c.innerHTML='<div style="color:#888;text-align:center;padding:20px;">未找到包含「'+si.value.trim()+'」的物品</div>';return;} let h='<div style="color:#aaa;margin-bottom:8px;font-size:13px;">🔍 搜索「'+si.value.trim()+'」- 找到 '+mi.length+' 种物品</div>'; mi.forEach((n,i)=>{let tq=0,ow=[]; el.forEach(e=>{const q=(fd[e].items&&fd[e].items[n])||0; if(q>0){tq+=q;ow.push({name:fd[e].name,qty:q})}}); h+='<div style="background:'+(i%2===0?'rgba(255,255,255,0.03)':'transparent')+';border-radius:6px;padding:8px 10px;margin-bottom:4px;border-left:3px solid '+(tq>0?'#f0a500':'transparent')+';"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;"><span style="color:#f0a500;font-weight:bold;font-size:13px;">'+n+'</span><span style="color:#eee;font-weight:bold;font-size:13px;">总计: '+tq.toLocaleString()+'</span></div>'+(ow.length?'<div style="display:flex;flex-wrap:wrap;gap:4px;">'+ow.sort((a,b)=>b.qty-a.qty).map(o=>'<span style="background:rgba(100,200,100,0.1);color:#6dd66d;padding:2px 8px;border-radius:10px;font-size:11px;">'+o.name+': '+o.qty.toLocaleString()+'</span>').join('')+'</div>':'<span style="color:#555;font-size:11px;">暂无</span>')+'</div>';}); c.innerHTML=h;
+        }else{cb.style.display='none'; const va={}; el.forEach(e=>{const en=fd[e]; if(en&&en.items) Object.entries(en.items).forEach(([n,q])=>{va[n]=(va[n]||0)+q})}); const so=Object.entries(va).sort((a,b)=>b[1]-a[1]); if(!so.length){c.innerHTML='<div style="color:#888;text-align:center;padding:20px;">暂无数据</div>';return;} let h='<div style="color:#aaa;margin-bottom:6px;font-size:12px;">'+(el.length===Object.keys(rawData).length?'📋 全部账号汇总':'👥 '+el.length+' 个账号')+'（'+so.length+' 种）</div><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="color:#888;border-bottom:1px solid rgba(255,255,255,0.08);"><th style="padding:6px 8px;text-align:left;">#</th><th style="padding:6px 8px;text-align:left;">物品</th><th style="padding:6px 8px;text-align:right;">数量</th><th style="padding:6px 8px;text-align:center;">拥有账号</th></tr></thead><tbody>'; let rk=1; so.forEach(([n,q])=>{const oc=el.filter(e=>{const en=fd[e]; return en&&en.items&&en.items[n]>0}).length; h+='<tr style="border-bottom:1px solid rgba(255,255,255,0.03);background:'+(rk%2===0?'rgba(255,255,255,0.02)':'transparent')+';"><td style="padding:5px 8px;color:#666;">'+rk+'</td><td style="padding:5px 8px;">'+n+'</td><td style="padding:5px 8px;text-align:right;color:#f0a500;font-weight:bold;">'+q.toLocaleString()+'</td><td style="padding:5px 8px;text-align:center;color:'+(oc>1?'#6dd66d':'#888')+';font-size:11px;">'+oc+'/'+el.length+'</td></tr>'; rk++;}); h+='</tbody></table>'; c.innerHTML=h;}
+    }
+
+    setTimeout(()=>{const si=document.getElementById('stats-search-input'),cb=document.getElementById('stats-search-clear'); if(si){let t=null; si.addEventListener('input',()=>{clearTimeout(t); t=setTimeout(()=>renderView(rawData),200)}); if(cb)cb.onclick=()=>{si.value='';cb.style.display='none';renderView(rawData);si.focus()}}},100);
+
+    overlay.querySelectorAll('.stats-export').forEach(btn=>{btn.onclick=()=>{if(btn.dataset.type==='inventory-json'){downloadFile(JSON.stringify(getAllInventoryData(),null,2),'背包_'+dateStr()+'.json','application/json')}else{const items=Object.keys(aggregated).sort(),emails=Object.keys(rawData); let csv='物品名称'; emails.forEach(e=>{csv+=','+rawData[e].name}); csv+=',汇总\n'; items.forEach(item=>{csv+=item; let t=0; emails.forEach(e=>{const q=(rawData[e].items&&rawData[e].items[item])||0; csv+=','+q; t+=q}); csv+=','+t+'\n'}); downloadFile('\ufeff'+csv,'背包_'+dateStr()+'.csv','text/csv;charset=utf-8')}}}); overlay.querySelector('.stats-close').onclick=()=>overlay.remove(); overlay.addEventListener('click',(e)=>{if(e.target===overlay)overlay.remove()});
+}
+
+// ============================================================
+// ★★★ 技能统计弹窗（已修复：显示账号名称）★★★
+// ============================================================
+function showSkillStats() {
+    const {skillAccounts:sa,skillAvg:sav,skillMax:sm,rawData}=getAggregatedSkills(), em=Object.keys(rawData), sn=Object.keys(sa);
+    if(!em.length){alert('暂无技能数据。请先进入游戏页，脚本会自动通过 API 获取。');return;}
+    const overlay=createBaseOverlay(), dialog=overlay.querySelector('.stats-dialog');
+    const ft=dialog.querySelector('div[style*="text-align:right"]'); if(ft)ft.textContent='更新: '+new Date().toLocaleString();
+    const h=overlay.querySelector('.stats-header');
+    h.innerHTML='<div style="font-size:16px;font-weight:bold;color:#f0a500;">🎯 技能等级统计 <span style="color:#888;font-weight:normal;font-size:12px;margin-left:8px;">'+em.length+' 人 · '+sn.length+' 种技能</span></div><div style="display:flex;gap:6px;"><button class="stats-export" data-type="skill-json" style="padding:5px 10px;background:rgba(255,255,255,0.06);color:#aaa;border:1px solid rgba(255,255,255,0.1);border-radius:6px;cursor:pointer;font-size:11px;">📥 JSON</button><button class="stats-export" data-type="skill-csv" style="padding:5px 10px;background:rgba(255,255,255,0.06);color:#aaa;border:1px solid rgba(255,255,255,0.1);border-radius:6px;cursor:pointer;font-size:11px;">📥 CSV</button><span class="stats-close" style="cursor:pointer;color:#888;font-size:18px;padding:2px 4px;">✕</span></div>';
+    const fb=overlay.querySelector('.stats-filter-bar'); fb.innerHTML='';
+    const af=document.createElement('button'); af.textContent='📋 全部对比'; af.style.cssText='padding:4px 10px;border-radius:12px;cursor:pointer;font-size:11px;border:1px solid #f0a500;background:rgba(240,165,0,0.2);color:#f0a500;font-weight:bold;'; fb.appendChild(af);
+    const ar=document.createElement('div'); ar.style.cssText='display:flex;gap:4px;flex-wrap:wrap;width:100%;margin-top:4px;';
+    const fbs=[]; em.forEach(e=>{const btn=document.createElement('button'); btn.textContent='👤 '+(rawData[e]?.name||e); btn.dataset.email=e; btn.style.cssText='padding:3px 8px;border-radius:10px;cursor:pointer;font-size:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(255,255,255,0.05);color:#aaa;'; btn.onmouseover=()=>{if(!btn.classList.contains('active')){btn.style.background='rgba(240,165,0,0.15)';btn.style.color='#eee'}}; btn.onmouseout=()=>{if(!btn.classList.contains('active')){btn.style.background='rgba(255,255,255,0.05)';btn.style.color='#aaa'}}; btn.onclick=()=>{fbs.forEach(b=>{b.classList.remove('active');b.style.background='rgba(255,255,255,0.05)';b.style.color='#aaa';b.style.borderColor='rgba(255,255,255,0.15)'}); af.style.background='rgba(255,255,255,0.05)';af.style.color='#aaa';af.style.borderColor='rgba(255,255,255,0.15)';af.style.fontWeight='normal'; btn.classList.add('active');btn.style.background='rgba(240,165,0,0.2)';btn.style.color='#f0a500';btn.style.borderColor='#f0a500'; renderSkillTable(e);}; fbs.push(btn); ar.appendChild(btn);}); fb.appendChild(ar);
+    af.onclick=()=>{fbs.forEach(b=>{b.classList.remove('active');b.style.background='rgba(255,255,255,0.05)';b.style.color='#aaa';b.style.borderColor='rgba(255,255,255,0.15)'}); af.style.background='rgba(240,165,0,0.2)';af.style.color='#f0a500';af.style.borderColor='#f0a500';af.style.fontWeight='bold'; renderSkillTable(null);}; af.click();
+
+    function renderSkillTable(fe) {
+        const c=overlay.querySelector('.stats-table-container'); if(!c) return;
+        if(fe){const en=rawData[fe],sk=en?en.skills||{}:{},so=Object.entries(sk).sort((a,b)=>b[1]-a[1]); if(!so.length){c.innerHTML='<div style="color:#888;text-align:center;padding:20px;">暂无数据</div>';return;} let h='<div style="color:#aaa;margin-bottom:6px;font-size:12px;">👤 '+(rawData[fe]?.name||fe)+' 的技能（'+so.length+' 种）</div><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="color:#888;border-bottom:1px solid rgba(255,255,255,0.08);"><th style="padding:6px 8px;text-align:left;">#</th><th style="padding:6px 8px;text-align:left;">技能</th><th style="padding:6px 8px;text-align:right;">等级</th></tr></thead><tbody>'; let rk=1; so.forEach(([n,l])=>{h+='<tr style="border-bottom:1px solid rgba(255,255,255,0.03);background:'+(rk%2===0?'rgba(255,255,255,0.02)':'transparent')+';"><td style="padding:5px 8px;color:#666;">'+rk+'</td><td style="padding:5px 8px;">'+n+'</td><td style="padding:5px 8px;text-align:right;color:#6dd66d;font-weight:bold;">'+l+'</td></tr>'; rk++}); h+='</tbody></table>'; c.innerHTML=h;
+        }else{const ss=sn.sort((a,b)=>(sav[b]||0)-(sav[a]||0)); let h='<div style="color:#aaa;margin-bottom:6px;font-size:12px;">📋 全部账号技能对比（'+ss.length+' 种技能）</div><div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;min-width:400px;"><thead><tr style="color:#888;border-bottom:1px solid rgba(255,255,255,0.08);"><th style="padding:4px 6px;text-align:left;position:sticky;left:0;background:#16213e;">技能</th><th style="padding:4px 6px;text-align:right;">平均</th><th style="padding:4px 6px;text-align:right;">最高</th>'+em.map(e=>'<th style="padding:4px 6px;text-align:right;">'+(rawData[e]?.name||e)+'</th>').join('')+'</tr></thead><tbody>'; ss.forEach((n,i)=>{h+='<tr style="border-bottom:1px solid rgba(255,255,255,0.03);background:'+(i%2===0?'rgba(255,255,255,0.02)':'transparent')+';"><td style="padding:4px 6px;position:sticky;left:0;background:#16213e;color:#f0a500;">'+n+'</td><td style="padding:4px 6px;text-align:right;color:#aaa;">'+sav[n]+'</td><td style="padding:4px 6px;text-align:right;color:#6dd66d;font-weight:bold;">'+sm[n]+'</td>'+em.map(e=>{const l=(sa[n]&&sa[n][e])||0; return '<td style="padding:4px 6px;text-align:right;'+(l===sm[n]&&l>0?'color:#f0a500;font-weight:bold;':'color:#eee;')+'">'+(l||'-')+'</td>';}).join('')+'</tr>'}); h+='</tbody></table></div>'; c.innerHTML=h;}
+    }
+    overlay.querySelectorAll('.stats-export').forEach(btn=>{btn.onclick=()=>{if(btn.dataset.type==='skill-json'){downloadFile(JSON.stringify(getAllSkillData(),null,2),'技能_'+dateStr()+'.json','application/json')}else{let csv='技能名称,平均等级,最高等级'; em.forEach(e=>{csv+=','+(rawData[e]?.name||e)}); csv+='\n'; sn.sort().forEach(s=>{csv+=s+','+sav[s]+','+sm[s]; em.forEach(e=>{csv+=','+((sa[s]&&sa[s][e])||0)}); csv+='\n'}); downloadFile('\ufeff'+csv,'技能_'+dateStr()+'.csv','text/csv;charset=utf-8')}}}); overlay.querySelector('.stats-close').onclick=()=>overlay.remove(); overlay.addEventListener('click',(e)=>{if(e.target===overlay)overlay.remove()});
+}
+
+// ============================================================
+// ★★★ 市场买单采集弹窗 ★★★
+// ============================================================
+let buyCrawling = false, buyTimerId = null, buyContainerEl = null;
+
+function showMarketBuyOrders() {
+    if (document.getElementById('market-buy-panel')) return;
+    const overlay = document.createElement('div'); overlay.id = 'market-buy-panel';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:100005;display:flex;align-items:center;justify-content:center;';
+    const W = 520;
+    overlay.innerHTML = `<div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border:1px solid rgba(255,255,255,0.12);border-radius:14px;width:${W}px;max-width:95vw;max-height:90vh;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#eee;font-family:'Segoe UI',Arial,sans-serif;font-size:13px;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:rgba(0,0,0,0.3);border-bottom:1px solid rgba(255,255,255,0.06);flex-shrink:0;">
+            <span style="font-weight:bold;color:#f0a500;font-size:15px;">🛒 市场买单采集</span>
+            <span id="buy-close" style="cursor:pointer;color:#888;font-size:18px;padding:2px 4px;">✕</span>
+        </div>
+        <div style="padding:8px 14px;border-bottom:1px solid rgba(255,255,255,0.04);flex-shrink:0;">
+            <div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0;">
+                <span id="buy-stats" style="color:#aaa;">📦 已采集: <strong style="color:#6dd66d;">0</strong> / ${MARKET_ITEM_IDS.length}</span>
+                <span id="buy-stats2" style="color:#aaa;">💰 有买单: <strong style="color:#6d9fff;">0</strong></span>
+            </div>
+            <div id="buy-timer-status" style="font-size:11px;color:#888;padding:2px 0;">⏰ 定时: <span style="color:#f0a500;">⏸ 已停止</span></div>
+        </div>
+        <div style="padding:6px 14px;flex-shrink:0;"><input id="buy-search" type="text" placeholder="🔍 搜索物品..." style="width:100%;padding:6px 10px;background:rgba(255,255,255,0.06);color:#eee;border:1px solid rgba(255,255,255,0.12);border-radius:6px;font-size:12px;outline:none;box-sizing:border-box;"></div>
+        <div style="padding:6px 14px;display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid rgba(255,255,255,0.04);flex-shrink:0;">
+            <button class="buy-btn" id="buy-start" style="flex:1;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:bold;background:rgba(100,200,100,0.15);color:#6dd66d;border:1px solid rgba(100,200,100,0.3);">▶ 开始采集</button>
+            <button class="buy-btn" id="buy-refresh" style="flex:1;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:11px;background:rgba(240,165,0,0.12);color:#f0a500;border:1px solid rgba(240,165,0,0.25);">🔄 刷新</button>
+            <button class="buy-btn" id="buy-timer-on" style="flex:1;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:10px;background:rgba(100,200,100,0.12);color:#6dd66d;border:1px solid rgba(100,200,100,0.25);">▶ 定时(1h)</button>
+            <button class="buy-btn" id="buy-timer-off" style="flex:1;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:10px;background:rgba(255,80,80,0.12);color:#ff6b6b;border:1px solid rgba(255,80,80,0.25);">⏹ 停止</button>
+        </div>
+        <div style="padding:4px 14px;display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid rgba(255,255,255,0.04);flex-shrink:0;">
+            <button class="buy-btn" id="buy-export-json" style="flex:1;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;background:rgba(100,200,100,0.1);color:#6dd66d;border:1px solid rgba(100,200,100,0.2);">📥 JSON</button>
+            <button class="buy-btn" id="buy-export-csv" style="flex:1;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;background:rgba(100,150,255,0.1);color:#6d9fff;border:1px solid rgba(100,150,255,0.2);">📥 CSV</button>
+            <button class="buy-btn" id="buy-clear" style="flex:0 0 60px;padding:4px 8px;border-radius:4px;cursor:pointer;font-size:10px;background:rgba(255,80,80,0.12);color:#ff6b6b;border:1px solid rgba(255,80,80,0.25);">🗑️ 清除</button>
+        </div>
+        <div id="buy-status" style="padding:3px 14px;color:#888;font-size:10px;border-bottom:1px solid rgba(255,255,255,0.04);flex-shrink:0;">就绪</div>
+        <div id="buy-container" style="flex:1;overflow-y:auto;padding:8px 14px 12px 14px;scrollbar-width:thin;font-size:12px;"></div>
+    </div>`;
+    document.body.appendChild(overlay);
+    buyContainerEl = overlay.querySelector('#buy-container');
+    overlay.querySelector('#buy-close').onclick = () => overlay.remove();
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+    overlay.querySelector('#buy-start').onclick = startBuyCrawl;
+    overlay.querySelector('#buy-refresh').onclick = renderBuyOrders;
+    overlay.querySelector('#buy-timer-on').onclick = () => { if (buyTimerId) { alert('⏰ 定时器已在运行'); return; } buyTimerId = setInterval(() => { startBuyCrawl(true); }, 3600000); updateBuyTimerStatus(); setBuyStatus('⏰ 定时采集已开启（每1小时）'); };
+    overlay.querySelector('#buy-timer-off').onclick = () => { if (buyTimerId) { clearInterval(buyTimerId); buyTimerId = null; } updateBuyTimerStatus(); setBuyStatus('⏹ 定时采集已停止'); };
+    overlay.querySelector('#buy-export-json').onclick = () => { const d = getBuyOrders(); downloadFile(JSON.stringify(d, null, 2), `买单_${dateStr()}.json`, 'application/json'); setBuyStatus(`✅ JSON已导出 (${Object.keys(d).length} 个)`); };
+    overlay.querySelector('#buy-export-csv').onclick = () => {
+        const d = getBuyOrders(); let csv = '商品ID,商品名称,买单序号,物品名称,单价,数量\n';
+        Object.keys(d).sort((a,b)=>Number(a)-Number(b)).forEach(id => {
+            const r = d[id], iname = `"${(r.itemName||'').replace(/"/g,'""')}"`;
+            if (r.buyOrders && r.buyOrders.length) r.buyOrders.forEach(o => { csv += `${id},${iname},${o.index},"${(o.itemName||'').replace(/"/g,'""')}",${o.price},${o.quantity}\n`; });
+            else csv += `${id},${iname},0,,,\n`;
+        });
+        downloadFile('\ufeff' + csv, `买单_${dateStr()}.csv`, 'text/csv;charset=utf-8');
+        setBuyStatus(`✅ CSV已导出 (${Object.keys(d).length} 个)`);
+    };
+    overlay.querySelector('#buy-clear').onclick = () => { if (buyCrawling) { alert('⚠️ 请等待采集完成'); return; } if (confirm('⚠️ 清除所有数据？')) { clearBuyOrders(); renderBuyOrders(); updateBuyStats(); updateBuyTimerStatus(); setBuyStatus('🗑️ 已清除'); } };
+
+    let st = null;
+    overlay.querySelector('#buy-search').addEventListener('input', function() { clearTimeout(st); st = setTimeout(renderBuyOrders, 300); });
+
+    renderBuyOrders(); updateBuyStats(); updateBuyTimerStatus();
+}
+
+function setBuyStatus(msg) { const el = document.getElementById('buy-status'); if (el) el.textContent = msg; }
+function updateBuyStats() {
+    const d = getBuyOrders(), ids = Object.keys(d).length, wd = Object.values(d).filter(r => r.buyOrders && r.buyOrders.length > 0).length;
+    const e1 = document.getElementById('buy-stats'), e2 = document.getElementById('buy-stats2');
+    if (e1) e1.innerHTML = `📦 已采集: <strong style="color:#6dd66d;">${ids}</strong> / ${MARKET_ITEM_IDS.length}`;
+    if (e2) e2.innerHTML = `💰 有买单: <strong style="color:#6d9fff;">${wd}</strong>`;
+}
+function updateBuyTimerStatus() { const el = document.getElementById('buy-timer-status'); if (!el) return; el.innerHTML = `⏰ 定时: <span style="color:${buyTimerId?'#6dd66d':'#f0a500'};">${buyTimerId?'✅ 开启中':'⏸ 已停止'}</span>`; }
+
+async function startBuyCrawl(isAuto) {
+    if (buyCrawling) { alert('⚠️ 正在采集中，请稍候'); return; }
+    buyCrawling = true; setBuyStatus('🔄 开始采集...');
+    for (const id of MARKET_ITEM_IDS) {
+        const d = getBuyOrders();
+        if (d[id] && d[id].timestamp) continue;
+        const name = ITEM_NAMES[id] || '未知';
+        setBuyStatus(`🔄 采集 ID=${id} (${name}) ...`);
+        const token = getAuthToken();
+        if (!token) { setBuyStatus('❌ 未找到 token'); buyCrawling = false; return; }
+        try {
+            const r = await fetch(API.MARKET_ORDER_BOOK, { method:'POST', headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`}, body:JSON.stringify({itemId:id}) });
+            const j = await r.json();
+            if (j.code === 20000) {
+                const orders = (j.data?.buyOrders||[]).map((o,i)=>({index:i+1, itemName:name, price:String(o.price||0), quantity:String(o.qty||o.quantity||0)}));
+                const allData = getBuyOrders(); allData[id] = { itemId: id, itemName: name, buyOrders: orders, timestamp: Date.now() };
+                saveBuyOrders(allData); renderBuyOrders(); updateBuyStats();
+                setBuyStatus(`✅ ${name} (${orders.length} 条买单)`);
+            } else setBuyStatus(`❌ ${name}: ${j.message}`);
+        } catch(e) { setBuyStatus(`❌ ${name}: ${e.message}`); }
+        await sleep(1200);
+    }
+    const d = getBuyOrders(), wd = Object.values(d).filter(r => r.buyOrders && r.buyOrders.length > 0).length;
+    setBuyStatus(`🎉 采集完成！共 ${Object.keys(d).length} 个 (${wd} 个有数据)`);
+    buyCrawling = false;
+}
+
+function renderBuyOrders() {
+    if (!buyContainerEl) return;
+    const d = getBuyOrders(), entries = Object.entries(d);
+    if (!entries.length) { buyContainerEl.innerHTML = '<div style="color:#888;text-align:center;padding:30px;font-size:13px;">📭 暂无数据<br><span style="font-size:11px;color:#666;">点击「▶ 开始采集」采集买单数据</span></div>'; return; }
+    const si = document.getElementById('buy-search'), ft = si ? si.value.trim().toLowerCase() : '';
+    let filtered = entries;
+    if (ft) filtered = entries.filter(([id, r]) => (r.itemName||'').toLowerCase().includes(ft) || id.includes(ft));
+    if (!filtered.length) { buyContainerEl.innerHTML = `<div style="color:#888;text-align:center;padding:20px;">🔍 未找到「${ft}」</div>`; return; }
+    filtered.forEach(([id, r]) => { r._tv = (r.buyOrders||[]).reduce((s,o) => s + (parseFloat(o.price)||0) * (parseFloat(o.quantity)||0), 0); });
+    filtered.sort((a, b) => (b[1]._tv||0) - (a[1]._tv||0));
+    let html = `<div style="color:#aaa;margin-bottom:6px;font-size:11px;display:flex;justify-content:space-between;"><span>📋 显示 ${filtered.length} 个</span><span style="color:#f0a500;">💰 按总价降序 ↓</span></div>`;
+    filtered.forEach(([id, r]) => {
+        const orders = r.buyOrders||[], tv = r._tv||0;
+        html += `<div style="margin-bottom:6px;border:1px solid rgba(255,255,255,0.06);border-radius:8px;overflow:hidden;">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 10px;background:rgba(240,165,0,0.08);border-bottom:1px solid rgba(255,255,255,0.04);">
+                <span style="font-weight:bold;color:#f0a500;font-size:13px;">${r.itemName||'未知'} <span style="font-size:10px;color:#888;font-weight:normal;">ID:${id}</span></span>
+                <span style="color:#6dd66d;font-weight:bold;font-size:12px;">💰 ${tv>=10000?(tv/10000).toFixed(1)+'万':tv.toLocaleString()}</span>
+            </div>`;
+        if (orders.length) {
+            html += '<div style="display:grid;grid-template-columns:30px 1fr 70px 70px 80px;padding:3px 10px;background:rgba(255,255,255,0.02);color:#666;font-size:10px;">#<span>物品</span><span style="text-align:right;">单价</span><span style="text-align:right;">数量</span><span style="text-align:right;">小计</span></div>';
+            orders.forEach(o => {
+                const st = (parseFloat(o.price)||0) * (parseFloat(o.quantity)||0);
+                html += `<div style="display:grid;grid-template-columns:30px 1fr 70px 70px 80px;padding:4px 10px;background:${o.index%2===0?'rgba(255,255,255,0.02)':'transparent'};border-bottom:1px solid rgba(255,255,255,0.02);font-size:11px;">
+                    <span style="color:#666;">${o.index}</span>
+                    <span style="color:#ddd;">${o.itemName}</span>
+                    <span style="text-align:right;color:#6d9fff;font-weight:bold;">💰${o.price}</span>
+                    <span style="text-align:right;color:#eee;">×${o.quantity}</span>
+                    <span style="text-align:right;color:#6dd66d;">${st>=10000?(st/10000).toFixed(1)+'万':st.toLocaleString()}</span>
+                </div>`;
+            });
+        } else html += '<div style="padding:8px 10px;color:#666;font-size:11px;text-align:center;">📭 暂无买单</div>';
+        html += '</div>';
+    });
+    buyContainerEl.innerHTML = html;
+}
+
+// ============================================================
+// ★★★ 账号面板功能 ★★★
+// ============================================================
+function loadCustomAccounts() { return storageGet(SK.CUSTOM_ACCOUNTS, {}); }
+function saveCustomAccounts(g) { storageSet(SK.CUSTOM_ACCOUNTS, g); }
+function addCustomAccount(gn, acc) { const c=loadCustomAccounts(); if(!c[gn])c[gn]=[]; if(c[gn].some(a=>a.email===acc.email)) return false; c[gn].push(acc); saveCustomAccounts(c); return true; }
+function deleteCustomAccount(gn, email) { const c=loadCustomAccounts(); if(c[gn]){c[gn]=c[gn].filter(a=>a.email!==email); if(!c[gn].length)delete c[gn]; saveCustomAccounts(c); return true;} return false; }
+function deleteCustomGroup(gn) { const c=loadCustomAccounts(); if(c[gn]){delete c[gn]; saveCustomAccounts(c); return true;} return false; }
+
+function getGroupRenames() { return storageGet(SK.GROUP_RENAMES, {}); }
+function saveGroupRenames(d) { storageSet(SK.GROUP_RENAMES, d); }
+function getDisplayGroupName(on) { const r=getGroupRenames(); return r[on]||on; }
+function setGroupRename(on, nn) { if(!on||!nn||on===nn) return false; const r=getGroupRenames(); r[on]=nn; saveGroupRenames(r); return true; }
+function getAccountRenames() { return storageGet(SK.ACCOUNT_RENAMES, {}); }
+function saveAccountRenames(d) { storageSet(SK.ACCOUNT_RENAMES, d); }
+function getDisplayAccountName(email, def) { if(!email) return def||'未知'; const r=getAccountRenames(); return r[email]||def||'未知'; }
+function setAccountRename(email, nn) { if(!email||!nn) return false; const r=getAccountRenames(); r[email]=nn; saveAccountRenames(r); return true; }
+
+function getDeletedAccounts() { return storageGet(SK.DELETED_ACCOUNTS, {}); }
+function saveDeletedAccounts(d) { storageSet(SK.DELETED_ACCOUNTS, d); }
+function isAccountDeleted(gn, email) { if(!email) return true; const d=getDeletedAccounts(); return d[gn]&&d[gn].includes(email); }
+function markAccountDeleted(gn, email) { if(!email) return; const d=getDeletedAccounts(); if(!d[gn])d[gn]=[]; if(!d[gn].includes(email))d[gn].push(email); saveDeletedAccounts(d); }
+function getDeletedGroups() { return storageGet(SK.DELETED_GROUPS, []); }
+function saveDeletedGroups(d) { storageSet(SK.DELETED_GROUPS, d); }
+function isGroupDeleted(gn) { return getDeletedGroups().includes(gn); }
+function markGroupDeleted(gn) { const d=getDeletedGroups(); if(!d.includes(gn))d.push(gn); saveDeletedGroups(d); }
+
+function moveAccountToGroup(sg, email, tg) {
+    if(sg===tg||!email) return false; const c=loadCustomAccounts(); let acc=null;
+    if(c[sg]){const idx=c[sg].findIndex(a=>a.email===email); if(idx!==-1){[acc]=c[sg].splice(idx,1); if(!c[sg].length)delete c[sg];}}
+    if(!acc&&BUILTIN_ACCOUNT_GROUPS[sg]){const ba=BUILTIN_ACCOUNT_GROUPS[sg].find(a=>a.email===email); if(ba)acc={...ba};}
+    if(!acc) return false;
+    const d=getDeletedAccounts(); if(d[sg]){d[sg]=d[sg].filter(e=>e!==email); if(!d[sg].length)delete d[sg]; saveDeletedAccounts(d);}
+    if(!c[tg])c[tg]=[]; if(c[tg].some(a=>a.email===email)){if(!c[sg])c[sg]=[]; c[sg].push(acc); saveCustomAccounts(c); return false;}
+    c[tg].push(acc); saveCustomAccounts(c); return true;
+}
+
+function getAllAccountGroups() {
+    const m={}; Object.keys(BUILTIN_ACCOUNT_GROUPS).forEach(k=>{if(!isGroupDeleted(k))m[k]=[...(BUILTIN_ACCOUNT_GROUPS[k]||[])].filter(a=>a&&a.email&&!isAccountDeleted(k,a.email))});
+    const c=loadCustomAccounts(); Object.keys(c).forEach(k=>{if(isGroupDeleted(k))return; if(m[k]){const es=new Set(m[k].map(a=>a.email));c[k].forEach(a=>{if(a&&a.email&&!es.has(a.email)){m[k].push(a);es.add(a.email)}})}else m[k]=[...c[k]]}); return m;
+}
+function isCustomAccount(gn, email) { const c=loadCustomAccounts(); return c[gn]&&c[gn].some(a=>a.email===email); }
+function isPureCustomGroup(gn) { return !(BUILTIN_ACCOUNT_GROUPS[gn]&&BUILTIN_ACCOUNT_GROUPS[gn].length>0); }
+
+function saveLastAccount(a) { try{localStorage.setItem(SK.LAST_ACCOUNT,JSON.stringify({name:a.name,email:a.email}))}catch(e){} }
+function loadLastAccount() { try{const r=localStorage.getItem(SK.LAST_ACCOUNT); if(r){const p=JSON.parse(r); if(p&&p.email)return p}}catch(e){} return null; }
+function clearLastAccount() { localStorage.removeItem(SK.LAST_ACCOUNT); }
+function getPanelCollapsed() { return localStorage.getItem(SK.PANEL_COLLAPSED)==='true'; }
+function setPanelCollapsed(v) { localStorage.setItem(SK.PANEL_COLLAPSED,v?'true':'false'); }
+function getPanelPosition() { return {left:localStorage.getItem(SK.PANEL_LEFT)||'10px',top:localStorage.getItem(SK.PANEL_TOP)||'10px'}; }
+function setPanelPosition(l,t) { localStorage.setItem(SK.PANEL_LEFT,l); localStorage.setItem(SK.PANEL_TOP,t); }
+
+let isCollapsed=getPanelCollapsed(), lastUsedAccount=loadLastAccount(), panelRef=null, titleSpanRef=null, contentRef=null;
+
+async function fillInput(inp, val) {
+    if(!inp)return; inp.focus();inp.click();
+    const ns=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value')?.set; if(ns)ns.call(inp,val); else inp.value=val;
+    inp.dispatchEvent(new Event('input',{bubbles:true})); inp.dispatchEvent(new Event('change',{bubbles:true})); inp.blur();inp.focus();
+}
+function findInputs() {
+    const es=['input[type="email"]','input[name="email"]','input[placeholder*="邮箱" i]','input[placeholder*="email" i]','input[placeholder*="账号" i]','input[placeholder*="username" i]','input[name="username"]','input[autocomplete="username"]','input:not([type="hidden"]):not([type="password"])'];
+    const ps=['input[type="password"]','input[name="password"]','input[placeholder*="密码" i]','input[placeholder*="password" i]','input[autocomplete="current-password"]'];
+    let ei=null,pi=null,form=document.querySelector('form');
+    if(form){for(const s of es){ei=form.querySelector(s);if(ei&&ei.type!=='password')break}for(const s of ps){pi=form.querySelector(s);if(pi)break}}
+    if(!ei){for(const s of es){ei=document.querySelector(s);if(ei&&ei.type!=='password')break}}
+    if(!pi){for(const s of ps){pi=document.querySelector(s);if(pi)break}}
+    return{emailInput:ei,passInput:pi,form};
+}
+async function submitLogin() {
+    const bs=['button[type="submit"]','button[class*="login" i]','button[class*="submit" i]','button[class*="signin" i]','button:has(svg)','button:last-of-type','input[type="submit"]','input[type="button"][value*="登录" i]','input[type="button"][value*="log" i]','[role="button"]'];
+    for(const s of bs){const b=document.querySelector(s);if(b){if(b.disabled){b.disabled=false;b.classList.remove('ant-btn-disabled','Mui-disabled')}b.click();return true}}
+    const{form}=findInputs(); if(form){form.dispatchEvent(new Event('submit',{bubbles:true})); return true} return false;
+}
+function findAndClickLogoutButton(fo) {
+    const all=document.querySelectorAll('a,button,span,div,li');
+    for(const el of all){const t=(el.textContent||'').trim().toLowerCase(); if(t==='退出'||t==='退出登录'||t==='注销'||t==='logout'||t==='sign out'||t==='log out'||t==='登出'||t.includes('退出登录')||t.includes('注销')){const s=window.getComputedStyle(el); if(s.display!=='none'&&s.visibility!=='hidden'){if(!fo)el.click();return true}}}
+    return false;
+}
+function clearSiteAuth() {
+    document.cookie.split(';').forEach(c=>{const e=c.indexOf('='),n=e>-1?c.substr(0,e).trim():c.trim(); if(n){document.cookie=n+'=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;';document.cookie=n+'=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;domain=.'+location.hostname;document.cookie=n+'=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;domain='+location.hostname}});
+    for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(k&&(k.toLowerCase().includes('token')||k.toLowerCase().includes('auth')||k.toLowerCase().includes('session')||k.toLowerCase().includes('login')||k.toLowerCase().includes('user')||k.toLowerCase().includes('charsgame')))localStorage.removeItem(k)}
+    clearLastAccount();
+}
+async function logout() { updateStatus('🚪 退出中...'); removeAllOverlays(); findAndClickLogoutButton(); clearSiteAuth(); lastUsedAccount=null; refreshPanelHighlight(); updateStatus('✅ 已退出'); await sleep(300); window.location.href='https://idle.charsgame.com/auth'; }
+
+async function switchAccount(acc) {
+    updateStatus(`🔄 切换到 ${acc.name}...`);
+    if(findAndClickLogoutButton(true)){clearSiteAuth(); saveLastAccount(acc); lastUsedAccount={name:acc.name,email:acc.email}; refreshPanelHighlight(); const{emailInput,passInput}=findInputs(); if(!emailInput||!passInput){updateStatus('📄 跳转到登录页...');window.location.href='https://idle.charsgame.com/auth?switch='+encodeURIComponent(acc.email);return} await fillInput(emailInput,acc.email);await sleep(100);await fillInput(passInput,acc.password);await sleep(200);updateStatus(`✅ 已填入 ${acc.name}，正在登录...`);await sleep(200);await submitLogin();}
+    else{const{emailInput,passInput}=findInputs(); if(!emailInput||!passInput){alert('❌ 未找到登录表单');updateStatus('❌ 未找到表单');return} await fillInput(emailInput,acc.email);await sleep(100);await fillInput(passInput,acc.password);await sleep(150); if(ENABLE_REMEMBER_LAST){saveLastAccount(acc);lastUsedAccount={name:acc.name,email:acc.email};refreshPanelHighlight()} updateStatus(`✅ 正在登录 ${acc.name}...`);await sleep(300);await submitLogin()}
+}
+function checkSwitchParam() {
+    const p=new URLSearchParams(window.location.search), se=p.get('switch');
+    if(se){const ag=getAllAccountGroups(); for(const g of Object.values(ag)){for(const a of g){if(a.email===se){setTimeout(async()=>{await sleep(500);const{emailInput,passInput}=findInputs(); if(emailInput&&passInput){await fillInput(emailInput,a.email);await sleep(100);await fillInput(passInput,a.password);await sleep(200);await submitLogin()}},1000);return true}}} return false}
+}
+
+// ============================================================
+// ★★★ 实时检测（每1小时）★★★
+// ============================================================
+let lastInvHash=0, lastSkillHash=0;
+async function startRealtimeMonitor() {
+    const la=loadLastAccount(); if(!la) return;
+    setTimeout(async()=>{const items=await parseInventory(); if(Object.keys(items).length>0&&await saveCurrentInventory(la.email,la.name))lastInvHash=hashObject(items)},1500);
+    setTimeout(async()=>{const skills=await parseSkills(); if(Object.keys(skills).length>0&&await saveCurrentSkills(la.email,la.name))lastSkillHash=hashObject(skills)},2000);
+    setInterval(async()=>{const ca=loadLastAccount(); if(!ca)return; const items=await parseInventory(), ih=hashObject(items); if(ih!==lastInvHash&&Object.keys(items).length>0){lastInvHash=ih;await saveCurrentInventory(ca.email,ca.name)} const skills=await parseSkills(), sh=hashObject(skills); if(sh!==lastSkillHash&&Object.keys(skills).length>0){lastSkillHash=sh;await saveCurrentSkills(ca.email,ca.name)}},3600000);
+}
+function refreshPanelHighlight() {
+    if(!panelRef)return; if(titleSpanRef)titleSpanRef.innerHTML=`📋 账号${lastUsedAccount?' · '+getDisplayAccountName(lastUsedAccount.email,lastUsedAccount.name):''}`;
+    panelRef.querySelectorAll('button.account-btn').forEach(btn=>{const e=btn.getAttribute('data-email'),lu=lastUsedAccount&&lastUsedAccount.email===e; btn.style.background=lu?'rgba(240,165,0,0.15)':'rgba(255,255,255,0.04)'; btn.style.borderColor=lu?'#f0a500':'rgba(255,255,255,0.08)'; let b=btn.querySelector('.last-used-badge'); if(lu&&!b){b=document.createElement('span');b.className='last-used-badge';b.textContent='✓';b.style.cssText='margin-left:auto;color:#f0a500;font-size:11px;font-weight:bold;';btn.appendChild(b)}else if(!lu&&b)b.remove()});
+}
+function rebuildPanel() { if(panelRef){panelRef.remove();panelRef=null;titleSpanRef=null;contentRef=null} createPanel(); }
+async function fillAndLogin(acc,ss){const{emailInput,passInput}=findInputs(); if(!emailInput||!passInput){alert('❌ 未找到登录表单');return false} await fillInput(emailInput,acc.email);await sleep(100);await fillInput(passInput,acc.password);await sleep(150); if(ENABLE_REMEMBER_LAST){saveLastAccount(acc);lastUsedAccount={name:acc.name,email:acc.email};refreshPanelHighlight()} if(!ss){await sleep(300);return await submitLogin()} return true}
+function makeDraggable(p,h){let d=false,sx,sy,ox,oy; h.style.cursor='grab'; h.addEventListener('mousedown',e=>{if(e.target.closest('#panel-menu')||e.target.closest('.more-btn'))return; d=true;sx=e.clientX;sy=e.clientY;ox=p.offsetLeft;oy=p.offsetTop;h.style.cursor='grabbing'}); document.addEventListener('mousemove',e=>{if(!d)return;p.style.left=(ox+e.clientX-sx)+'px';p.style.top=(oy+e.clientY-sy)+'px'}); document.addEventListener('mouseup',()=>{if(d){d=false;h.style.cursor='grab';setPanelPosition(p.style.left,p.style.top)}});}
+function showMenu(m){m.style.display=m.style.display==='block'?'none':'block';}
+
+function showAddAccountDialog() {
+    const gl=getAllGroupNamesForSelect(), o=document.createElement('div'); o.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:100001;display:flex;align-items:center;justify-content:center;';
+    const d=document.createElement('div'); d.style.cssText='background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:24px;width:360px;max-width:90vw;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#eee;';
+    let gs='<option value="__new__">── 新建分组 ──</option>'; gl.forEach(g=>{gs+=`<option value="${g.name}">${g.name}</option>`});
+    d.innerHTML=`<div style="font-size:16px;font-weight:bold;color:#f0a500;margin-bottom:18px;display:flex;justify-content:space-between;"><span>➕ 添加账号</span><span id="da-close" style="cursor:pointer;color:#888;font-size:18px;">✕</span></div>
+        <div style="margin-bottom:12px;"><label style="color:#aaa;font-size:12px;">选择分组</label><select id="da-group" style="width:100%;padding:8px;background:rgba(255,255,255,0.06);color:#eee;border:1px solid rgba(255,255,255,0.12);border-radius:6px;">${gs}</select></div>
+        <div id="da-new-wrap" style="margin-bottom:12px;display:none;"><label style="color:#aaa;font-size:12px;">新分组名称</label><input id="da-new-group" type="text" placeholder="输入新分组名称..." style="width:100%;padding:8px;background:rgba(255,255,255,0.06);color:#eee;border:1px solid rgba(255,255,255,0.12);border-radius:6px;box-sizing:border-box;"></div>
+        <div style="margin-bottom:12px;"><label style="color:#aaa;font-size:12px;">账号名称</label><input id="da-name" type="text" placeholder="名称" style="width:100%;padding:8px;background:rgba(255,255,255,0.06);color:#eee;border:1px solid rgba(255,255,255,0.12);border-radius:6px;box-sizing:border-box;"></div>
+        <div style="margin-bottom:12px;"><label style="color:#aaa;font-size:12px;">邮箱</label><input id="da-email" type="text" placeholder="example@qq.com" style="width:100%;padding:8px;background:rgba(255,255,255,0.06);color:#eee;border:1px solid rgba(255,255,255,0.12);border-radius:6px;box-sizing:border-box;"></div>
+        <div style="margin-bottom:18px;"><label style="color:#aaa;font-size:12px;">密码</label><input id="da-pass" type="password" placeholder="密码" style="width:100%;padding:8px;background:rgba(255,255,255,0.06);color:#eee;border:1px solid rgba(255,255,255,0.12);border-radius:6px;box-sizing:border-box;"></div>
+        <div id="da-err" style="color:#ff6b6b;font-size:11px;margin-bottom:8px;display:none;"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;"><button id="da-cancel" style="padding:8px 18px;background:rgba(255,255,255,0.06);color:#aaa;border:1px solid rgba(255,255,255,0.1);border-radius:6px;cursor:pointer;">取消</button><button id="da-confirm" style="padding:8px 18px;background:rgba(240,165,0,0.2);color:#f0a500;border:1px solid #f0a500;border-radius:6px;cursor:pointer;font-weight:bold;">✅ 确认添加</button></div>`;
+    o.appendChild(d); document.body.appendChild(o);
+    d.querySelector('#da-close').onclick=()=>o.remove(); d.querySelector('#da-cancel').onclick=()=>o.remove(); o.addEventListener('click',e=>{if(e.target===o)o.remove()});
+    d.querySelector('#da-group').addEventListener('change',function(){d.querySelector('#da-new-wrap').style.display=this.value==='__new__'?'block':'none'});
+    d.querySelector('#da-confirm').onclick=()=>{
+        let gn=d.querySelector('#da-group').value; if(gn==='__new__'){gn=d.querySelector('#da-new-group').value.trim(); if(!gn){d.querySelector('#da-err').textContent='请输入分组名';d.querySelector('#da-err').style.display='block';return}}
+        const n=d.querySelector('#da-name').value.trim(),e=d.querySelector('#da-email').value.trim(),p=d.querySelector('#da-pass').value.trim();
+        if(!n||!e||!p){d.querySelector('#da-err').textContent='请填写完整信息';d.querySelector('#da-err').style.display='block';return}
+        if(!addCustomAccount(gn,{name:n,email:e,password:p})){d.querySelector('#da-err').textContent=`分组中已存在该邮箱`;d.querySelector('#da-err').style.display='block';return}
+        o.remove(); rebuildPanel(); updateStatus(`✅ 已添加 ${n}`);
+    };
+}
+function showDeleteAccountConfirm(gn,acc,cb){const o=document.createElement('div');o.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:100002;display:flex;align-items:center;justify-content:center;'; const d=document.createElement('div');d.style.cssText='background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:24px;width:320px;max-width:90vw;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#eee;text-align:center;'; d.innerHTML=`<div style="font-size:36px;margin-bottom:12px;">🗑️</div><div style="font-size:15px;font-weight:bold;margin-bottom:8px;">确认删除</div><div style="color:#aaa;margin-bottom:16px;">从「${gn}」删除<br><strong style="color:#f0a500;">${acc.name}</strong>（${acc.email}）？</div><div style="display:flex;gap:8px;justify-content:center;"><button id="dc-cancel" style="padding:8px 18px;background:rgba(255,255,255,0.06);color:#aaa;border:1px solid rgba(255,255,255,0.1);border-radius:6px;cursor:pointer;">取消</button><button id="dc-confirm" style="padding:8px 18px;background:rgba(255,80,80,0.2);color:#ff6b6b;border:1px solid #ff6b6b;border-radius:6px;cursor:pointer;font-weight:bold;">🗑️ 确认删除</button></div>`; o.appendChild(d);document.body.appendChild(o); d.querySelector('#dc-cancel').onclick=()=>o.remove(); d.querySelector('#dc-confirm').onclick=()=>{o.remove();if(cb)cb()}; o.addEventListener('click',e=>{if(e.target===o)o.remove()});}
+function showEditNameDialog(t,c,onC){const o=document.createElement('div');o.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:100004;display:flex;align-items:center;justify-content:center;';const d=document.createElement('div');d.style.cssText='background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:24px;width:340px;max-width:90vw;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#eee;'; d.innerHTML=`<div style="font-size:15px;font-weight:bold;color:#f0a500;margin-bottom:16px;display:flex;justify-content:space-between;"><span>✏️ ${t}</span><span id="ec-close" style="cursor:pointer;color:#888;font-size:18px;">✕</span></div><input id="ec-input" type="text" value="${c.replace(/"/g,'&quot;')}" style="width:100%;padding:10px;background:rgba(255,255,255,0.06);color:#eee;border:1px solid rgba(255,255,255,0.12);border-radius:6px;font-size:14px;box-sizing:border-box;margin-bottom:16px;"><div style="display:flex;gap:8px;justify-content:flex-end;"><button id="ec-cancel" style="padding:8px 18px;background:rgba(255,255,255,0.06);color:#aaa;border:1px solid rgba(255,255,255,0.1);border-radius:6px;cursor:pointer;">取消</button><button id="ec-confirm" style="padding:8px 18px;background:rgba(240,165,0,0.2);color:#f0a500;border:1px solid #f0a500;border-radius:6px;cursor:pointer;font-weight:bold;">✅ 确认</button></div><div id="ec-err" style="color:#ff6b6b;font-size:11px;margin-top:8px;text-align:center;display:none;"></div>`;o.appendChild(d);document.body.appendChild(o);const inp=d.querySelector('#ec-input'),err=d.querySelector('#ec-err');d.querySelector('#ec-close').onclick=()=>o.remove();d.querySelector('#ec-cancel').onclick=()=>o.remove();o.addEventListener('click',e=>{if(e.target===o)o.remove()});d.querySelector('#ec-confirm').onclick=()=>{const v=inp.value.trim();if(!v){err.textContent='名称不能为空';err.style.display='block';return}o.remove();onC(v)};inp.focus();inp.select();inp.addEventListener('keydown',e=>{if(e.key==='Enter')d.querySelector('#ec-confirm').click()})}
+function getAllGroupNamesForSelect() { const ag=getAllAccountGroups(), r=[]; Object.keys(ag).forEach(n=>{const c=loadCustomAccounts(); r.push({name:n,isCustom:!!c[n]&&!BUILTIN_ACCOUNT_GROUPS[n]})}); return r; }
+
+// ============================================================
+// ★★★ 创建面板 ★★★
+// ============================================================
+async function createPanel() {
+    if(panelRef)return;
+    const onInv=isInventoryPage(), onGame=isGamePage()&&!onInv;
+    const p=document.createElement('div'); p.id='account-panel-enhanced'; panelRef=p;
+    const pos=getPanelPosition();
+    p.style.cssText=`position:fixed;top:${pos.top};left:${pos.left};z-index:99999;background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);color:#eee;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5);font-family:'Segoe UI',Arial,sans-serif;font-size:13px;border:1px solid rgba(255,255,255,0.08);overflow:hidden;max-height:85vh;min-width:200px;`;
+    const h=document.createElement('div'); h.id='panel-header'; h.style.cssText=`display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:rgba(0,0,0,0.3);border-bottom:${isCollapsed?'none':'1px solid rgba(255,255,255,0.06)'};user-select:none;`;
+    const ts=document.createElement('span'); ts.style.cssText='font-weight:bold;color:#f0a500;font-size:14px;'; ts.innerHTML=`📋 账号${lastUsedAccount?' · '+getDisplayAccountName(lastUsedAccount.email,lastUsedAccount.name):''}`;
+    if(onInv||onGame){const ic=Object.keys(getAllInventoryData()).length,sc=Object.keys(getAllSkillData()).length; if(ic>0)ts.innerHTML+=` <span style="color:#6d9fff;font-size:11px;">📦${ic}人</span>`; if(sc>0)ts.innerHTML+=` <span style="color:#6dd66d;font-size:11px;">🎯${sc}人</span>`}
+    titleSpanRef=ts;
+    const ra=document.createElement('span'); ra.style.cssText='display:flex;align-items:center;gap:6px;';
+    const mb=document.createElement('span'); mb.textContent='⚙';mb.title='更多';mb.className='more-btn';mb.style.cssText='cursor:pointer;font-size:16px;color:#aaa;padding:2px 4px;border-radius:4px;';mb.onmouseover=()=>mb.style.background='rgba(255,255,255,0.1)';mb.onmouseout=()=>mb.style.background='transparent';
+    const ti=document.createElement('span'); ti.id='toggle-icon';ti.textContent=isCollapsed?'▶':'▼';ti.style.cssText='font-size:14px;color:#aaa;cursor:pointer;padding:2px 4px;border-radius:4px;';ti.onmouseover=()=>ti.style.background='rgba(255,255,255,0.1)';ti.onmouseout=()=>ti.style.background='transparent';
+    ra.appendChild(mb);ra.appendChild(ti); h.appendChild(ts);h.appendChild(ra); p.appendChild(h);
+    const m=document.createElement('div'); m.id='panel-menu';m.style.cssText='display:none;position:absolute;top:44px;right:8px;background:#1a1a2e;border:1px solid #333;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.6);z-index:100000;min-width:190px;padding:4px 0;';
+    mb.onclick=e=>{e.stopPropagation();showMenu(m)};
+    [['📦 导出配置',()=>{downloadFile(JSON.stringify(getAllAccountGroups(),null,2),'account_groups.json','application/json');m.style.display='none';updateStatus('✅ 已导出')}],
+    ['📥 导入配置',()=>{const i=document.createElement('input');i.type='file';i.accept='.json';i.onchange=e=>{const f=e.target.files[0];if(!f)return;new FileReader().onload=ev=>{try{const j=JSON.parse(ev.target.result);if(typeof j==='object'&&!Array.isArray(j)){saveCustomAccounts(j);rebuildPanel();updateStatus('✅ 已导入')}else alert('格式错误')}catch(err){alert('JSON解析失败')}};};i.click();m.style.display='none'}],
+    ['🔄 重置位置',()=>{p.style.left='10px';p.style.top='10px';setPanelPosition('10px','10px');m.style.display='none'}],
+    ['🧹 清除记住的账号',()=>{clearLastAccount();lastUsedAccount=null;ts.innerHTML='📋 账号';refreshPanelHighlight();m.style.display='none'}],
+    ['🗑️ 清除背包数据',()=>{if(confirm('确定清除所有背包数据吗？')){clearAllInventoryData();if(titleSpanRef)titleSpanRef.innerHTML='📋 账号'+(lastUsedAccount?' · '+getDisplayAccountName(lastUsedAccount.email,lastUsedAccount.name):'');m.style.display='none'}}],
+    ['🗑️ 清除技能数据',()=>{if(confirm('确定清除所有技能数据吗？')){clearAllSkillData();if(titleSpanRef)titleSpanRef.innerHTML='📋 账号'+(lastUsedAccount?' · '+getDisplayAccountName(lastUsedAccount.email,lastUsedAccount.name):'');m.style.display='none'}}],
+    ['divider'],['🚪 退出登录',()=>{m.style.display='none';logout()}]].forEach((item,idx)=>{
+        if(item[0]==='divider'){const d=document.createElement('div');d.style.cssText='height:1px;background:rgba(255,255,255,0.08);margin:4px 0;';m.appendChild(d);return}
+        if(item[0]==='🚪 退出登录'){const d=document.createElement('div');d.style.cssText='height:1px;background:rgba(255,255,255,0.08);margin:4px 0;';m.appendChild(d)}
+        const mi=document.createElement('div');mi.textContent=item[0];mi.style.cssText=`padding:8px 16px;cursor:pointer;color:${item[0].includes('清除')||item[0].includes('退出')?'#ff6b6b':'#ccc'};font-size:13px;`;mi.onmouseover=()=>mi.style.background='rgba(255,255,255,0.06)';mi.onmouseout=()=>mi.style.background='transparent';mi.onclick=item[1];m.appendChild(mi)
+    }); p.appendChild(m);
+    document.addEventListener('click',e=>{if(!m.contains(e.target)&&e.target!==mb)m.style.display='none'});
+    const c=document.createElement('div');c.id='panel-content';contentRef=c;c.style.cssText=`padding:8px 12px 12px 12px;max-height:calc(85vh-50px);overflow-y:auto;display:${isCollapsed?'none':'block'};scrollbar-width:thin;`;
+    const ss=document.createElement('style');ss.textContent='#panel-content::-webkit-scrollbar{width:4px}#panel-content::-webkit-scrollbar-track{background:transparent}#panel-content::-webkit-scrollbar-thumb{background:#444;border-radius:4px}#account-panel-enhanced button:active{transform:scale(0.97)}';document.head.appendChild(ss);
+    const AG=getAllAccountGroups(),gns=Object.keys(AG);
+    gns.forEach((gn,gi)=>{const aa=AG[gn];if(!aa||!aa.length)return;const dgn=getDisplayGroupName(gn),gh=document.createElement('div'),ie=DEFAULT_EXPANDED_GROUPS.includes(gn);gh.style.cssText=`display:flex;align-items:center;gap:6px;padding:6px 0 4px 0;margin-top:${gi>0?'6px':'0'};color:#f0a500;font-size:12px;font-weight:bold;cursor:pointer;user-select:none;border-top:${gi>0?'1px solid rgba(255,255,255,0.05)':'none'};`;gh.innerHTML=`<span style="font-size:10px;">${ie?'▼':'▶'}</span><span class="group-name-edit" title="双击编辑分组名称">${dgn}</span><span style="color:#666;font-weight:normal;font-size:11px;">(${aa.length})</span>`;const gns2=gh.querySelector('.group-name-edit');gns2.addEventListener('dblclick',e=>{e.stopPropagation();showEditNameDialog('修改分组名称',dgn,(nn)=>{if(setGroupRename(gn,nn)){rebuildPanel();showToast(`✅ 分组已更名为「${nn}」`,'#6dd66d')}})});gh.dataset.groupName=gn;gh.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect='move';gh.style.background='rgba(240,165,0,0.25)';gh.style.borderRadius='6px';gh.style.outline='1px solid #f0a500'});gh.addEventListener('dragleave',()=>{gh.style.background='';gh.style.borderRadius='';gh.style.outline=''});gh.addEventListener('drop',e=>{e.preventDefault();gh.style.background='';gh.style.borderRadius='';gh.style.outline='';try{const d=JSON.parse(e.dataTransfer.getData('text/plain'));if(moveAccountToGroup(d.sourceGroup,d.email,gn)){rebuildPanel();showToast(`✅ 已移至「${getDisplayGroupName(gn)}」`,'#6dd66d')}else showToast('⚠️ 移动失败','#ff6b6b')}catch(err){console.error(err)}});const gb=document.createElement('div');gb.style.cssText=`display:${ie?'block':'none'};padding-left:6px;`;aa.forEach(acc=>{if(!acc||!acc.email)return;const ic=isCustomAccount(gn,acc.email),dn=getDisplayAccountName(acc.email,acc.name),w=document.createElement('div');w.style.cssText='display:flex;align-items:center;gap:3px;margin:3px 0;';const btn=document.createElement('button');btn.className='account-btn';btn.setAttribute('data-email',acc.email);const lu=lastUsedAccount&&lastUsedAccount.email===acc.email;btn.style.cssText=`flex:1;display:flex;align-items:center;gap:6px;padding:7px 10px;background:${lu?'rgba(240,165,0,0.15)':ic?'rgba(100,200,100,0.06)':'rgba(255,255,255,0.04)'};color:#eee;border:1px solid ${lu?'#f0a500':ic?'rgba(100,200,100,0.2)':'rgba(255,255,255,0.08)'};border-radius:6px;cursor:pointer;text-align:left;font-size:13px;`;const ns2=document.createElement('span');ns2.textContent=dn;ns2.className='account-name-edit';ns2.title='单击登录 · 双击编辑名称';btn.appendChild(ns2);if(lu){const b=document.createElement('span');b.className='last-used-badge';b.textContent='✓';b.style.cssText='margin-left:auto;color:#f0a500;font-size:11px;font-weight:bold;';btn.appendChild(b)}btn.draggable=true;btn.setAttribute('data-source-group',gn);btn.addEventListener('dragstart',e=>{e.dataTransfer.setData('text/plain',JSON.stringify({email:acc.email,sourceGroup:gn}));e.dataTransfer.effectAllowed='move';btn.style.opacity='0.4'});btn.addEventListener('dragend',()=>{btn.style.opacity='1';document.querySelectorAll('[data-group-name]').forEach(el=>{el.style.background='';el.style.outline=''})});btn.onmouseover=()=>{btn.style.background='rgba(240,165,0,0.2)';btn.style.borderColor='#f0a500'};btn.onmouseout=()=>{const lu2=lastUsedAccount&&lastUsedAccount.email===acc.email;btn.style.background=lu2?'rgba(240,165,0,0.15)':ic?'rgba(100,200,100,0.06)':'rgba(255,255,255,0.04)';btn.style.borderColor=lu2?'#f0a500':ic?'rgba(100,200,100,0.2)':'rgba(255,255,255,0.08)'};let ct=null;btn.addEventListener('click',async(e)=>{if(e.target.closest('[class*="del"]'))return;if(ct){clearTimeout(ct);ct=null;return}ct=setTimeout(async()=>{ct=null;btn.innerHTML='🔄 切换中...';btn.disabled=true;await switchAccount(acc)},280)});btn.addEventListener('dblclick',e=>{e.stopPropagation();if(ct){clearTimeout(ct);ct=null}showEditNameDialog('修改账号名称',getDisplayAccountName(acc.email,acc.name),(nn)=>{if(setAccountRename(acc.email,nn)){rebuildPanel();showToast(`✅ 账号已更名为「${nn}」`,'#6dd66d')}})});btn.oncontextmenu=async(e)=>{e.preventDefault();btn.innerHTML='✏️ 填充中...';btn.disabled=true;await fillAndLogin(acc,true);btn.disabled=false;btn.innerHTML='';const ns3=document.createElement('span');ns3.textContent=getDisplayAccountName(acc.email,acc.name);ns3.className='account-name-edit';ns3.title='单击登录 · 双击编辑名称';btn.appendChild(ns3);if(lastUsedAccount&&lastUsedAccount.email===acc.email){const b=document.createElement('span');b.className='last-used-badge';b.textContent='✓';b.style.cssText='margin-left:auto;color:#f0a500;font-size:11px;font-weight:bold;';btn.appendChild(b)}updateStatus(`✅ 已填充 ${getDisplayAccountName(acc.email,acc.name)}`)};w.appendChild(btn);const db=document.createElement('span');db.textContent='✕';db.title='删除';db.style.cssText='font-size:10px;color:#ff6b6b;cursor:pointer;padding:4px 5px;border-radius:4px;opacity:0.4;flex-shrink:0;';db.onmouseover=()=>{db.style.opacity='1';db.style.background='rgba(255,80,80,0.15)'};db.onmouseout=()=>{db.style.opacity='0.4';db.style.background='transparent'};db.onclick=e=>{e.stopPropagation();showDeleteAccountConfirm(gn,acc,()=>{if(ic)deleteCustomAccount(gn,acc.email);else markAccountDeleted(gn,acc.email);rebuildPanel();updateStatus(`🗑️ 已删除 ${getDisplayAccountName(acc.email,acc.name)}`)})};w.appendChild(db);gb.appendChild(w)});const dg=document.createElement('div');dg.textContent='🗑️ 删除此分组';dg.style.cssText='font-size:10px;color:#ff6b6b;cursor:pointer;text-align:right;padding:2px 4px;margin-top:2px;opacity:0.4;';dg.onmouseover=()=>dg.style.opacity='0.8';dg.onmouseout=()=>dg.style.opacity='0.4';dg.onclick=()=>{if(confirm(`确定删除「${getDisplayGroupName(gn)}」？\n（分组内所有账号将一并移除）`)){markGroupDeleted(gn);rebuildPanel();updateStatus('🗑️ 已删除分组')}};gb.appendChild(dg);gh.onclick=()=>{const a=gh.querySelector('span');const n=gb.style.display!=='none';gb.style.display=n?'none':'block';a.textContent=n?'▶':'▼'};c.appendChild(gh);c.appendChild(gb)});
+    const tb=document.createElement('div');tb.style.cssText='display:flex;flex-direction:column;gap:4px;padding:8px 0 2px 0;border-top:1px solid rgba(255,255,255,0.05);';
+    const btns=[{t:'➕ 添加账号',c:'add',a:()=>showAddAccountDialog()}];
+    if(onInv||onGame){btns.push({t:'📦 背包统计',c:'stats',a:()=>showInventoryStats()},{t:'🎒 记录背包',c:'collect',a:async()=>{const la=loadLastAccount();if(!la){alert('⚠️ 未找到当前账号信息');return}const items=await parseInventory();if(!Object.keys(items).length){alert('⚠️ 背包中未找到物品');return}if(await saveCurrentInventory(la.email,la.name)){showToast(`✅ 已保存 ${getDisplayAccountName(la.email,la.name)} 的背包 (${Object.keys(items).length} 种)`,'#6dd66d');updateStatus(`✅ ${Object.keys(items).length} 种物品已记录`)}}},{t:'🎯 技能统计',c:'skill',a:()=>showSkillStats()},{t:'🎯 记录技能',c:'collect',a:async()=>{const la=loadLastAccount();if(!la){alert('⚠️ 未找到当前账号信息');return}const skills=await parseSkills();if(!Object.keys(skills).length){alert('⚠️ 未找到技能数据');return}if(await saveCurrentSkills(la.email,la.name)){showToast(`✅ 已保存 ${getDisplayAccountName(la.email,la.name)} 的技能 (${Object.keys(skills).length} 种)`,'#6dd66d');updateStatus(`✅ ${Object.keys(skills).length} 种技能已记录`)}}},{t:'📊 买单',c:'stats',a:()=>showMarketBuyOrders()},{t:'🔍 检测',c:'normal',a:async()=>{const items=await parseInventory(),p=await fetchProfileFromAPI();updateStatus(`🎒${Object.keys(items).length}种 🎯${Object.keys(p.skills).length}种 💰${p.gold.toLocaleString()}`)}})}else{btns.push({t:'📦 背包统计',c:'stats',a:()=>showInventoryStats()},{t:'🎯 技能统计',c:'skill',a:()=>showSkillStats()},{t:'📊 买单',c:'stats',a:()=>showMarketBuyOrders()},{t:'🔍 检测表单',c:'normal',a:()=>{const r=findInputs();updateStatus(r.emailInput&&r.passInput?'✅ 已找到表单':'❌ 未找到')}})}btns.push({t:'🚪 退出登录',c:'danger',a:()=>logout()});
+    btns.forEach(({t:text,c:cls,a:action})=>{const btn=document.createElement('button');btn.textContent=text;const cs={add:{bg:'rgba(100,200,100,0.1)',cl:'#6dd66d',bd:'rgba(100,200,100,0.2)'},stats:{bg:'rgba(100,150,255,0.1)',cl:'#6d9fff',bd:'rgba(100,150,255,0.2)'},skill:{bg:'rgba(200,100,255,0.1)',cl:'#c77dff',bd:'rgba(200,100,255,0.2)'},collect:{bg:'rgba(240,165,0,0.12)',cl:'#f0a500',bd:'rgba(240,165,0,0.25)'},danger:{bg:'rgba(255,80,80,0.12)',cl:'#ff6b6b',bd:'rgba(255,80,80,0.25)'},normal:{bg:'rgba(255,255,255,0.05)',cl:'#aaa',bd:'rgba(255,255,255,0.06)'}};const s=cs[cls]||cs.normal;btn.style.cssText=`width:100%;padding:7px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:${cls==='normal'?'normal':'bold'};background:${s.bg};color:${s.cl};border:1px solid ${s.bd};box-sizing:border-box;`;const obg=s.bg,ocl=s.cl;btn.onmouseover=()=>{btn.style.background=cls==='add'?'rgba(100,200,100,0.2)':cls==='stats'?'rgba(100,150,255,0.2)':cls==='skill'?'rgba(200,100,255,0.2)':cls==='collect'?'rgba(240,165,0,0.25)':cls==='danger'?'rgba(255,80,80,0.25)':'rgba(240,165,0,0.15)';btn.style.color=cls==='add'?'#8ae88a':cls==='stats'?'#8ab4ff':cls==='skill'?'#d9a3ff':cls==='collect'?'#ffc04d':cls==='danger'?'#ff4444':'#eee'};btn.onmouseout=()=>{btn.style.background=obg;btn.style.color=ocl};btn.onclick=action;tb.appendChild(btn)});
+    const sr=document.createElement('div');sr.style.cssText='display:flex;justify-content:space-between;padding:2px 2px 0 0;align-items:center;';const is2=document.createElement('span');is2.id='panel-info';is2.style.cssText='color:#888;font-size:10px;flex:1;';is2.textContent='';if(onInv||onGame){(async()=>{const items=await parseInventory(),p=await fetchProfileFromAPI();is2.textContent=[Object.keys(items).length&&`🎒 ${Object.keys(items).length}种`,Object.keys(p.skills).length&&`🎯 ${Object.keys(p.skills).length}种`,p.gold>0&&`💰 ${p.gold.toLocaleString()}`].filter(Boolean).join(' ')})()}sr.appendChild(is2);const ss2=document.createElement('span');ss2.id='panel-status';ss2.style.cssText='color:#666;font-size:10px;';ss2.textContent='就绪';sr.appendChild(ss2);tb.appendChild(sr);c.appendChild(tb);p.appendChild(c);
+    function togglePanel(){isCollapsed=!isCollapsed;c.style.display=isCollapsed?'none':'block';h.style.borderBottom=isCollapsed?'none':'1px solid rgba(255,255,255,0.06)';ti.textContent=isCollapsed?'▶':'▼';setPanelCollapsed(isCollapsed)}ti.onclick=togglePanel;h.ondblclick=togglePanel;makeDraggable(p,h);document.body.appendChild(p);startRealtimeMonitor();
+}
+function updateStatus(msg){const el=document.getElementById('panel-status');if(el)el.textContent=msg;}
+function showToast(msg,color){const t=document.createElement('div');t.textContent=msg;t.style.cssText=`position:fixed;top:60px;right:10px;z-index:99999;padding:8px 16px;background:rgba(100,200,100,0.15);color:${color};border:1px solid rgba(100,200,100,0.3);border-radius:8px;font-size:12px;font-family:'Segoe UI',Arial,sans-serif;font-weight:bold;box-shadow:0 4px 16px rgba(0,0,0,0.4);transition:opacity 0.5s;`;document.body.appendChild(t);setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),500)},2500)}
+let panelCreated=false;
+function tryCreatePanel(){if(panelCreated)return;const onInv=isInventoryPage(),onGame=isGamePage()&&!onInv;if(onInv||onGame){setTimeout(()=>{if(!panelCreated){createPanel();panelCreated=true}},1500)}else if(isAuthPage()){if(checkSwitchParam()){setTimeout(()=>{if(!panelCreated){const cf=setInterval(()=>{const{emailInput,passInput}=findInputs();if(emailInput&&passInput&&!panelCreated){clearInterval(cf);createPanel();panelCreated=true}},500)}},2000)}else{const cf=setInterval(()=>{const{emailInput,passInput}=findInputs();if(emailInput&&passInput&&!panelCreated){clearInterval(cf);createPanel();panelCreated=true}},500);setTimeout(()=>{if(!panelCreated){clearInterval(cf);createPanel();panelCreated=true}},10000)}}
+}
+tryCreatePanel();
+const ob=new MutationObserver(()=>{if(!panelCreated){tryCreatePanel();return}if(panelRef){const onInv=isInventoryPage(),onGame=isGamePage()&&!onInv;const hb=Array.from(panelRef.querySelectorAll('button')).some(b=>b.textContent.includes('🎒 记录')),hs=Array.from(panelRef.querySelectorAll('button')).some(b=>b.textContent.includes('🎯 记录'));if((onInv&&!hb)||(onGame&&!hs)||(!onGame&&!onInv&&(hb||hs)))rebuildPanel()}});
+ob.observe(document.body,{childList:true,subtree:true});
+console.log('[AutoLogin] 🚀 v9.0 最终版已加载（含市场买单）');
+
+})();
