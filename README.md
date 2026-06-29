@@ -1,5 +1,5 @@
 # Idle-charsgame-tools-plus
-适用于  https://idle.charsgame.com  游戏的一款油猴插件
+适用于游戏的一款油猴插件
 # Project Idle 自动填表 + 数据统计（增强版）
 
 一个功能强大的 Tampermonkey 油猴脚本，专为 [Project Idle](https://idle.charsgame.com) 游戏设计，集成账号登录管理、背包物品统计、技能等级统计、市场买单采集等功能。
